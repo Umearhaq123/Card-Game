@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memory Match Game</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for card flip effect and font */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* The card container */
+        .card {
+            perspective: 1000px;
+            cursor: pointer;
+            height: 100%; /* Important for grid item sizing */
+            width: 100%;
+            user-select: none;
+            touch-action: manipulation; /* Improves touch responsiveness */
+        }
+
+        /* The actual card content, which flips */
+        .card-inner {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            text-align: center;
+            transition: transform 0.6s;
+            transform-style: preserve-3d;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            border-radius: 0.75rem; /* rounded-xl */
+        }
+
+        /* Flip effect when the 'flipped' class is applied */
+        .card.flipped .card-inner {
+            transform: rotateY(180deg);
+        }
+
+        /* Card faces */
+        .card-face {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            backface-visibility: hidden;
+            border-radius: 0.75rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.5rem; /* Larger font for icons */
+        }
+
+        /* Back of the card (face down) */
+        .card-back {
+            background-color: #4f46e5; /* Indigo-600 */
+            color: #ffffff;
+            /* Placeholder icon for the back */
+            content: '?';
+        }
+
+        /* Front of the card (face up) */
+        .card-front {
+            background-color: #ffffff;
+            color: #1f2937; /* Gray-800 */
+            transform: rotateY(180deg);
+        }
+
+        /* Styling for matched cards */
+        .card.matched .card-inner {
+            pointer-events: none; /* Disable clicking once matched */
+            box-shadow: 0 0 15px rgba(253, 224, 71, 0.8); /* Yellow glow */
+        }
+
+        /* Modal specific styles */
+        .modal-overlay {
+            z-index: 50;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-start justify-center p-4 sm:p-8">
+
+    <div id="game-container" class="w-full max-w-4xl bg-white p-6 rounded-2xl shadow-2xl">
+        <h1 class="text-3xl sm:text-4xl font-bold text-center text-indigo-700 mb-6">Memory Match</h1>
+        
+        <!-- Stats and Controls -->
+        <div class="flex flex-col sm:flex-row justify-between items-center mb-6 p-4 bg-indigo-50 rounded-xl">
+            <div class="text-xl font-semibold text-gray-700 mb-2 sm:mb-0">
+                Moves: <span id="moves" class="text-indigo-600">0</span>
+            </div>
+            <button id="restart-button" class="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-6 rounded-lg shadow-md transition duration-200 w-full sm:w-auto">
+                Restart Game
+            </button>
+        </div>
+
+        <!-- Game Board -->
+        <div id="game-board" class="grid grid-cols-4 gap-3 sm:gap-4 md:gap-6 aspect-square max-w-xl mx-auto">
+            <!-- Cards will be inserted here by JavaScript -->
+        </div>
+    </div>
+
+    <!-- Game Over Modal -->
+    <div id="game-over-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 modal-overlay flex items-center justify-center p-4">
+        <div class="bg-white p-8 rounded-xl shadow-2xl text-center max-w-sm w-full transform transition-transform duration-300 scale-95 opacity-0" id="modal-content">
+            <h2 class="text-4xl font-extrabold text-indigo-600 mb-4">You Won! 🎉</h2>
+            <p class="text-lg text-gray-700 mb-6">
+                You matched all the cards in <span id="final-moves" class="font-bold text-xl text-indigo-700">0</span> moves.
+            </p>
+            <button id="modal-restart-button" class="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3 px-8 rounded-lg shadow-lg transition duration-200">
+                Play Again
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // --- Game Setup and Variables ---
+        const icons = [
+            '⭐', '🚀', '🔮', '🎉',
+            '🍕', '⚓', '🔔', '💡',
+            '☀️', '💎', '🎨', '🔥'
+        ];
+        
+        // Use 8 pairs (16 cards) for mobile/tablet friendly 4x4 grid
+        const NUM_PAIRS = 8;
+        const gameIcons = icons.slice(0, NUM_PAIRS);
+
+        const gameBoard = document.getElementById('game-board');
+        const movesDisplay = document.getElementById('moves');
+        const restartButton = document.getElementById('restart-button');
+        const modal = document.getElementById('game-over-modal');
+        const modalContent = document.getElementById('modal-content');
+        const modalRestartButton = document.getElementById('modal-restart-button');
+        const finalMovesDisplay = document.getElementById('final-moves');
+
+        let cards = [];
+        let flippedCards = [];
+        let matchCount = 0;
+        let moves = 0;
+        let lockBoard = false; // Flag to prevent rapid clicking while cards are flipping back
+
+        // Helper function to shuffle an array (Fisher-Yates algorithm)
+        function shuffle(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+            return array;
+        }
+
+        // --- Game Initialization ---
+
+        function createDeck() {
+            // Create pairs, flatten, and shuffle
+            let deck = [...gameIcons, ...gameIcons];
+            return shuffle(deck);
+        }
+
+        function createCardElement(value) {
+            const card = document.createElement('div');
+            card.classList.add('card');
+            card.setAttribute('data-card-value', value);
+
+            card.innerHTML = `
+                <div class="card-inner">
+                    <!-- Card Back (Face Down) -->
+                    <div class="card-face card-back">
+                        <svg class="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.207 19.33L4 19V9m15.177-2.909A8.001 8.001 0 0019.8 4.7M9 11l3-3m0 0l3 3m-3-3v8"></path></svg>
+                    </div>
+                    <!-- Card Front (Face Up) -->
+                    <div class="card-face card-front">
+                        ${value}
+                    </div>
+                </div>
+            `;
+            
+            // Add click listener to the card
+            card.addEventListener('click', flipCard);
+            
+            return card;
+        }
+
+        function renderBoard() {
+            // Clear the board and reset state
+            gameBoard.innerHTML = '';
+            cards = [];
+            
+            const shuffledDeck = createDeck();
+
+            shuffledDeck.forEach(value => {
+                const cardElement = createCardElement(value);
+                gameBoard.appendChild(cardElement);
+                cards.push(cardElement);
+            });
+            
+            // Set grid columns based on number of cards (4x4)
+            gameBoard.style.gridTemplateColumns = `repeat(4, minmax(0, 1fr))`;
+        }
+
+        function resetGame() {
+            // Reset state variables
+            flippedCards = [];
+            matchCount = 0;
+            moves = 0;
+            lockBoard = false;
+            movesDisplay.textContent = moves;
+
+            // Hide modal if visible
+            modal.classList.add('hidden');
+            modalContent.classList.remove('scale-100', 'opacity-100');
+            modalContent.classList.add('scale-95', 'opacity-0');
+
+            // Render new board
+            renderBoard();
+        }
+
+        // --- Game Logic ---
+
+        function flipCard() {
+            // If the board is locked or the card is already flipped/matched, do nothing
+            if (lockBoard || this === flippedCards[0] || this.classList.contains('flipped') || this.classList.contains('matched')) {
+                return;
+            }
+
+            // Flip the card visually
+            this.classList.add('flipped');
+            flippedCards.push(this);
+
+            if (flippedCards.length === 2) {
+                // Two cards are flipped, check for match
+                lockBoard = true;
+                checkForMatch();
+            }
+        }
+
+        function checkForMatch() {
+            const [card1, card2] = flippedCards;
+            const isMatch = card1.getAttribute('data-card-value') === card2.getAttribute('data-card-value');
+
+            // Update moves counter
+            moves++;
+            movesDisplay.textContent = moves;
+
+            if (isMatch) {
+                // It's a match!
+                disableCards();
+            } else {
+                // Not a match, flip back after a delay
+                unflipCards();
+            }
+        }
+
+        function disableCards() {
+            const [card1, card2] = flippedCards;
+            
+            // Mark them as matched (visually and logically)
+            card1.classList.add('matched');
+            card2.classList.add('matched');
+
+            // Increment match count
+            matchCount++;
+
+            // Check if game is over
+            if (matchCount === NUM_PAIRS) {
+                setTimeout(showGameOverModal, 500); // Small delay to see the final match
+            }
+
+            // Reset flipped cards and unlock the board immediately
+            resetFlippedCards();
+        }
+
+        function unflipCards() {
+            // Delay the flip-back so the user can see the cards
+            setTimeout(() => {
+                flippedCards.forEach(card => {
+                    card.classList.remove('flipped');
+                });
+                resetFlippedCards();
+            }, 1000); // 1 second delay
+        }
+
+        function resetFlippedCards() {
+            [flippedCards] = [[]]; // Clear the array
+            lockBoard = false; // Unlock the board
+        }
+
+        function showGameOverModal() {
+            finalMovesDisplay.textContent = moves;
+            modal.classList.remove('hidden');
+            // Animate the modal content
+            setTimeout(() => {
+                modalContent.classList.remove('scale-95', 'opacity-0');
+                modalContent.classList.add('scale-100', 'opacity-100');
+            }, 10);
+        }
+
+        // --- Event Listeners ---
+        restartButton.addEventListener('click', resetGame);
+        modalRestartButton.addEventListener('click', resetGame);
+        
+        // Initialize the game on page load
+        window.onload = resetGame;
+
+    </script>
+</body>
+</html>
